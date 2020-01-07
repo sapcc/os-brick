@@ -189,7 +189,8 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
                                                   cacerts=cacerts)
         image_transfer._start_transfer(read_handle, write_handle, timeout_secs)
 
-    def _disconnect(self, tmp_file_path, session, ds_ref, dc_ref, vmdk_path):
+    def _disconnect(self, session, tmp_file_path, tmp_file, tmp_file_size,
+                    ds_ref, dc_ref, vmdk_path):
         # The restored volume is in compressed (streamOptimized) format.
         # So we upload it to a temporary location in vCenter datastore and copy
         # the compressed vmdk to the volume vmdk. The copy operation
@@ -202,14 +203,13 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
         self._create_temp_ds_folder(
             session, six.text_type(ds_path.parent), dc_ref)
 
-        with open(tmp_file_path, "rb") as tmp_file:
-            dc_name = session.invoke_api(
+        dc_name = session.invoke_api(
                 vim_util, 'get_object_property', session.vim, dc_ref, 'name')
-            cookies = session.vim.client.options.transport.cookiejar
-            cacerts = self._ca_file if self._ca_file else not self._insecure
-            self._upload_vmdk(
+        cookies = session.vim.client.options.transport.cookiejar
+        cacerts = self._ca_file if self._ca_file else not self._insecure
+        self._upload_vmdk(
                 tmp_file, self._ip, self._port, dc_name, dstore.name, cookies,
-                ds_path.rel_path, os.path.getsize(tmp_file_path), cacerts,
+                ds_path.rel_path, tmp_file_size, cacerts,
                 self._timeout)
 
         # Delete the current volume vmdk because the copy operation does not
@@ -245,6 +245,26 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
                                   datacenter=dc_ref)
         session.wait_for_task(task)
 
+    def _disconnect_with_import(self, import_data, volume_ops, backing,
+                                tmp_file, file_size):
+        import_spec = volume_ops.get_import_spec(import_data)
+        folder = vim_util.get_moref(import_data['folder'],
+                                    'Folder')
+        rp = vim_util.get_moref(import_data['resource_pool'],
+                                'ResourcePool')
+
+        volume_ops.delete_backing(backing)
+        write_handle = rw_handles.VmdkWriteHandle(
+            volume_ops._session,
+            self._ip,
+            self._port,
+            rp,
+            folder,
+            import_spec,
+            file_size,
+            'POST')
+        image_transfer._start_transfer(tmp_file, write_handle, self._timeout)
+
     def disconnect_volume(self, connection_properties, device_info,
                           force=False, ignore_errors=False):
         tmp_file_path = device_info['path']
@@ -274,8 +294,27 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
                 dc_ref = vim_util.get_moref(
                     connection_properties['datacenter'], "Datacenter")
                 vmdk_path = connection_properties['vmdk_path']
-                self._disconnect(
-                    tmp_file_path, session, ds_ref, dc_ref, vmdk_path)
+
+                with open(tmp_file_path, "rb") as tmp_file:
+                    file_size = os.path.getsize(tmp_file_path)
+                    import_data = connection_properties.get('import_data')
+                    if import_data:
+                        import_data = connection_properties['import_data']
+                        import_data['profile_id'] = connection_properties[
+                            'profile_id']
+                        import_data['vm']['name'] = connection_properties[
+                            'name']
+                        import_data['vm']['uuid'] = connection_properties[
+                            'volume_id']
+                        self._disconnect_with_import(import_data,
+                                                     VolumeOps(session),
+                                                     backing,
+                                                     tmp_file,
+                                                     file_size)
+                    else:
+                        self._disconnect(session, tmp_file_path, tmp_file,
+                                         file_size, ds_ref, dc_ref,
+                                         vmdk_path)
         finally:
             os.remove(tmp_file_path)
             if session:
@@ -283,3 +322,125 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
 
     def extend_volume(self, connection_properties):
         raise NotImplementedError
+
+
+class VolumeOps:
+
+    def __init__(self, session):
+        self._session = session
+
+    def get_import_spec(self, import_data):
+        cf = self._session.vim.client.factory
+        vm_import_spec = cf.create('ns0:VirtualMachineImportSpec')
+        vm_import_spec.configSpec = self.get_vm_config_spec(import_data)
+
+        return vm_import_spec
+
+    def get_vm_config_spec(self, import_data):
+        vm = import_data['vm']
+        cf = self._session.vim.client.factory
+        vm_file_info = cf.create('ns0:VirtualMachineFileInfo')
+        vm_file_info.vmPathName = vm['path_name']
+
+        config_spec = cf.create('ns0:VirtualMachineConfigSpec')
+        config_spec.name = vm['name']
+        config_spec.guestId = vm['guest_id']
+        config_spec.numCPUs = vm['num_cpus']
+        config_spec.memoryMB = vm['memory_mb']
+        config_spec.files = vm_file_info
+        config_spec.version = vm['vmx_version']
+        config_spec.instanceUuid = vm['uuid']
+
+        extra_config = vm['extra_config']
+        if extra_config:
+            config_spec.extraConfig = self._get_extra_config_option_values(
+                extra_config)
+        profile_id = import_data['profile_id']
+        if profile_id:
+            vm_profile = cf.create('ns0:VirtualMachineDefinedProfileSpec')
+            vm_profile.profileId = profile_id
+            config_spec.vmProfile = vm_profile
+
+        config_spec.managedBy = self.\
+            _create_managed_by_info(vm['extension_key'], vm['extension_type'])
+
+        controller = import_data['controller']
+
+        controller_spec = None
+        if controller['create']:
+            controller_device = cf.create('ns0:%s' % controller['type'])
+            controller_device.key = controller['key']
+            controller_device.busNumber = controller['bus_number']
+            shared_bus = controller['shared_bus']
+            if shared_bus:
+                controller_device.sharedBus = shared_bus
+
+            controller_spec = cf.create('ns0:VirtualDeviceConfigSpec')
+            controller_spec.operation = 'add'
+            controller_spec.device = controller_device
+
+        disk = import_data['disk']
+        disk_device = cf.create('ns0:VirtualDisk')
+        disk_device.capacityInKB = disk['capacity_in_kb']
+        disk_device.key = disk['key']
+        disk_device.unitNumber = 0
+        disk_device.controllerKey = controller['key']
+
+        disk_device_bkng = cf.create('ns0:VirtualDiskFlatVer2BackingInfo')
+        eagerly_scrub = disk['eagerly_scrub']
+        thin_provisioned = disk['thin_provisioned']
+        if eagerly_scrub:
+            disk_device_bkng.eagerlyScrub = True
+        elif thin_provisioned:
+            disk_device_bkng.thinProvisioned = True
+        disk_device_bkng.fileName = ''
+        disk_device_bkng.diskMode = 'persistent'
+        disk_device.backing = disk_device_bkng
+
+        disk_spec = cf.create('ns0:VirtualDeviceConfigSpec')
+        disk_spec.operation = 'add'
+        disk_spec.fileOperation = 'create'
+        disk_spec.device = disk_device
+        profile_id = import_data['profile_id']
+        if profile_id:
+            disk_profile = cf.create('ns0:VirtualMachineDefinedProfileSpec')
+            disk_profile.profileId = profile_id
+            disk_spec.profile = [disk_profile]
+
+        specs = [disk_spec]
+        if controller_spec:
+            specs.append(controller_spec)
+        config_spec.deviceChange = specs
+
+        return config_spec
+
+    def _create_managed_by_info(self, extension_key, extension_type):
+        managed_by = self._session.vim.client.factory.create(
+            'ns0:ManagedByInfo')
+        managed_by.extensionKey = extension_key
+        managed_by.type = extension_type
+        return managed_by
+
+    def _get_extra_config_option_values(self, extra_config):
+        cf = self._session.vim.client.factory
+        option_values = []
+
+        for key, value in extra_config.items():
+            opt = cf.create('ns0:OptionValue')
+            opt.key = key
+            opt.value = value
+            option_values.append(opt)
+
+        return option_values
+
+    def delete_backing(self, backing):
+        """Delete the backing.
+
+        :param backing: Managed object reference to the backing
+        """
+        LOG.debug("Deleting the VM backing: %s.", backing)
+        task = self._session.invoke_api(self._session.vim, 'Destroy_Task',
+                                        backing)
+        LOG.debug("Initiated deletion of VM backing: %s.", backing)
+        self._session.wait_for_task(task)
+        LOG.info("Deleted the VM backing: %s.", backing)
