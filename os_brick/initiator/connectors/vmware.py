@@ -109,19 +109,19 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
     def connect_volume(self, connection_properties):
         self._load_config(connection_properties)
         session = self._create_session()
-
         if connection_properties.get('import_data'):
-            return self.connect_volume_write_handle(session,
-                                                    connection_properties)
+            handle = self.connect_volume_write_handle(session,
+                                                      connection_properties)
         else:
-            return self.connect_volume_read_handle(session,
-                                                   connection_properties)
+            handle = self.connect_volume_read_handle(session,
+                                                     connection_properties)
+        return {'path': handle}
 
     def connect_volume_read_handle(self, session, connection_properties):
         vm_ref = vim_util.get_moref(connection_properties['volume'],
                                     'VirtualMachine')
 
-        handle = rw_handles.VmdkReadHandle(session,
+        return rw_handles.VmdkReadHandle(session,
                                            self._ip,
                                            self._port,
                                            vm_ref,
@@ -134,9 +134,7 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
         import_data = connection_properties['import_data']
         import_data['profile_id'] = connection_properties['profile_id']
         import_data['vm']['name'] = "%s_brick" % connection_properties['name']
-        write_handle = self._get_write_handle(import_data, volume_ops,
-                                              vmdk_size)
-        return write_handle
+        return self._get_write_handle(import_data, volume_ops, vmdk_size)
 
     @staticmethod
     def _snapshot_exists(self, session, backing):
