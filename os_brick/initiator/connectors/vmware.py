@@ -128,8 +128,6 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
                                            None,
                                            connection_properties['vmdk_size'])
 
-        self._read_handles[vm_ref.value] = handle
-
     def connect_volume_write_handle(self, session, connection_properties):
         volume_ops = VolumeOps(session)
         vmdk_size = connection_properties['vmdk_size']
