@@ -110,7 +110,7 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
         self._load_config(connection_properties)
         session = self._create_session()
 
-        if connection_properties['import_data']:
+        if connection_properties.get('import_data'):
             return self.connect_volume_write_handle(session,
                                                     connection_properties)
         else:
@@ -172,7 +172,7 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
                           force=False, ignore_errors=False):
         vmdk_handle = device_info['path']
         session = None
-        if connection_properties['import_data']:
+        if connection_properties.get('import_data'):
             session = self._create_session()
             volume_ops = VolumeOps(session)
             backing = vim_util.get_moref(connection_properties['volume'],
