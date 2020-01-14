@@ -166,9 +166,9 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
     def disconnect_volume(self, connection_properties, device_info,
                           force=False, ignore_errors=False):
         vmdk_handle = device_info['path']
-        session = None
+        vmdk_handle.close()
+        session = vmdk_handle._session
         if connection_properties.get('import_data'):
-            session = self._create_session()
             volume_ops = VolumeOps(session)
             backing = vim_util.get_moref(connection_properties['volume'],
                                          "VirtualMachine")
@@ -186,9 +186,7 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
             volume_ops.update_instance_uuid(new_backing,
                                             connection_properties['volume_id'])
 
-        vmdk_handle.close()
-        if session:
-            session.logout()
+        session.logout()
 
     def extend_volume(self, connection_properties):
         raise NotImplementedError
