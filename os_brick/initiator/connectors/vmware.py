@@ -136,7 +136,6 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
         import_data['vm']['name'] = "%s_brick" % connection_properties['name']
         return self._get_write_handle(import_data, volume_ops, vmdk_size)
 
-    @staticmethod
     def _snapshot_exists(self, session, backing):
         snapshot = session.invoke_api(vim_util,
                                       'get_object_property',
