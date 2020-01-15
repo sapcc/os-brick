@@ -37,8 +37,6 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
     This connector is only used for backup and restore of Cinder volumes.
     """
 
-    TMP_IMAGES_DATASTORE_FOLDER_PATH = "cinder_temp"
-
     def __init__(self, *args, **kwargs):
         # Check if oslo.vmware library is available.
         if vim_util is None:
@@ -64,15 +62,8 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
         return {}
 
     def check_valid_device(self, path, *args, **kwargs):
-        try:
-            with open(path, 'r') as dev:
-                dev.read(1)
-        except IOError:
-            LOG.exception(
-                "Failed to access the device on the path "
-                "%(path)s", {"path": path})
-            return False
-        return True
+        return isinstance(path, rw_handles.VmdkReadHandle) or isinstance(
+            path, rw_handles.VmdkWriteHandle)
 
     def get_volume_paths(self, connection_properties):
         return []
@@ -109,15 +100,18 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
     def connect_volume(self, connection_properties):
         self._load_config(connection_properties)
         session = self._create_session()
+        # when import_data is passed in, we know we have to connect for a write
+        # operation (a volume backup restore)
         if connection_properties.get('import_data'):
-            handle = self.connect_volume_write_handle(session,
-                                                      connection_properties)
+            handle = self._connect_volume_write_handle(session,
+                                                       connection_properties)
+        # otherwise we connect for a read operation
         else:
-            handle = self.connect_volume_read_handle(session,
-                                                     connection_properties)
+            handle = self._connect_volume_read_handle(session,
+                                                      connection_properties)
         return {'path': handle}
 
-    def connect_volume_read_handle(self, session, connection_properties):
+    def _connect_volume_read_handle(self, session, connection_properties):
         vm_ref = vim_util.get_moref(connection_properties['volume'],
                                     'VirtualMachine')
 
@@ -128,13 +122,14 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
                                            None,
                                            connection_properties['vmdk_size'])
 
-    def connect_volume_write_handle(self, session, connection_properties):
-        volume_ops = VolumeOps(session)
+    def _connect_volume_write_handle(self, session, connection_properties):
         vmdk_size = connection_properties['vmdk_size']
         import_data = connection_properties['import_data']
         import_data['profile_id'] = connection_properties['profile_id']
+        # we create the new backing with a temporary name. The cinder vmdk
+        # driver will know how to rename it in `terminate_connection()`
         import_data['vm']['name'] = "%s_brick" % connection_properties['name']
-        return self._get_write_handle(import_data, volume_ops, vmdk_size)
+        return self._get_write_handle(import_data, session, vmdk_size)
 
     def _snapshot_exists(self, session, backing):
         snapshot = session.invoke_api(vim_util,
@@ -146,7 +141,8 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
             return False
         return len(snapshot.rootSnapshotList) != 0
 
-    def _get_write_handle(self, import_data, volume_ops, file_size):
+    def _get_write_handle(self, import_data, session, file_size):
+        volume_ops = VolumeOps(session)
         import_spec = volume_ops.get_import_spec(import_data)
         folder = vim_util.get_moref(import_data['folder'],
                                     'Folder')
@@ -154,7 +150,7 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
                                 'ResourcePool')
 
         return rw_handles.VmdkWriteHandle(
-            volume_ops._session,
+            session,
             self._ip,
             self._port,
             rp,
@@ -176,10 +172,10 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
             # Currently there is no way we can restore the volume if it
             # contains redo-log based snapshots (bug 1599026).
             if self._snapshot_exists(session, backing):
+                volume_ops.delete_backing(new_backing)
                 msg = (_("Backing of volume: %s contains one or more "
                          "snapshots; cannot disconnect.") %
                        connection_properties['volume_id'])
-                volume_ops.delete_backing(new_backing)
                 raise exception.BrickException(message=msg)
 
             volume_ops.delete_backing(backing)
