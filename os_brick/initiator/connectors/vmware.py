@@ -157,7 +157,8 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
             folder,
             import_spec,
             file_size,
-            'POST')
+            http_method='POST',
+            update_progress=True)
 
     def disconnect_volume(self, connection_properties, device_info,
                           force=False, ignore_errors=False):
