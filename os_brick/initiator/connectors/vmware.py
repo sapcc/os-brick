@@ -113,11 +113,12 @@ class VmdkConnector(initiator_connector.InitiatorConnector):
                                     'VirtualMachine')
 
         return rw_handles.VmdkReadHandle(session,
-                                           self._ip,
-                                           self._port,
-                                           vm_ref,
-                                           None,
-                                           connection_properties['vmdk_size'])
+                                         self._ip,
+                                         self._port,
+                                         vm_ref,
+                                         None,
+                                         connection_properties['vmdk_size'],
+                                         update_progress=True)
 
     def _connect_volume_write_handle(self, session, connection_properties):
         vmdk_size = connection_properties['vmdk_size']
