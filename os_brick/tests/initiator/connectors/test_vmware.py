@@ -161,7 +161,8 @@ class VmdkConnectorTestCase(test_connector.ConnectorTestCase):
                                                  self._connector._port,
                                                  vm_ref,
                                                  None,
-                                                 props['vmdk_size'])
+                                                 props['vmdk_size'],
+                                                 update_progress=True)
         self.assertEqual(ret, vmdk_read_handle_ret)
 
     @mock.patch.object(VMDK_CONNECTOR, '_get_write_handle')
@@ -214,7 +215,8 @@ class VmdkConnectorTestCase(test_connector.ConnectorTestCase):
                                                   folder,
                                                   import_spec,
                                                   file_size,
-                                                  'POST')
+                                                  http_method='POST',
+                                                  update_progress=True)
         self.assertEqual(ret, vmdk_write_handle_ret)
 
     @ddt.data((None, False), ([mock.sentinel.snap], True))
