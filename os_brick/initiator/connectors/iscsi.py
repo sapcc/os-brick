@@ -471,7 +471,8 @@ class ISCSIConnector(base.BaseLinuxConnector, base_iscsi.BaseISCSIConnector):
         volume_paths = self.get_volume_paths(connection_properties)
         LOG.info("Found paths for volume %s", volume_paths)
         if volume_paths:
-            return self._linuxscsi.extend_volume(volume_paths)
+            return self._linuxscsi.extend_volume(
+                volume_paths, use_multipath=self.use_multipath)
         else:
             LOG.warning("Couldn't find any volume paths on the host to "
                         "extend volume for %(props)s",
@@ -514,6 +515,7 @@ class ISCSIConnector(base.BaseLinuxConnector, base_iscsi.BaseISCSIConnector):
             with excutils.save_and_reraise_exception():
                 self._cleanup_connection(connection_properties, force=True)
 
+    @utils.retry(exceptions=(exception.VolumeDeviceNotFound))
     def _get_device_link(self, wwn, device, mpath):
         # These are the default symlinks that should always be there
         if mpath:
