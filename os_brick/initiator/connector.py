@@ -45,6 +45,8 @@ windows_connector_list = [
     'os_brick.initiator.windows.fibre_channel.WindowsFCConnector',
     'os_brick.initiator.windows.rbd.WindowsRBDConnector',
     'os_brick.initiator.windows.smbfs.WindowsSMBFSConnector'
+    'os_brick.initiator.windows.smbfs.WindowsSMBFSConnector',
+    'os_brick.initiator.connectors.qemu.QemuIScsiConnector',
 ]
 
 unix_connector_list = [
@@ -64,6 +66,7 @@ unix_connector_list = [
     'os_brick.initiator.connectors.vmware.VmdkConnector',
     'os_brick.initiator.connectors.storpool.StorPoolConnector',
     'os_brick.initiator.connectors.nvmeof.NVMeOFConnector',
+    'os_brick.initiator.connectors.qemu.QemuIScsiConnector',
 ]
 
 
@@ -164,6 +167,12 @@ _connector_mapping_windows = {
         'os_brick.initiator.windows.rbd.WindowsRBDConnector',
     initiator.SMBFS:
         'os_brick.initiator.windows.smbfs.WindowsSMBFSConnector',
+}
+
+# Mapping for the qemu connectors
+_connector_mapping_qemu = {
+    initiator.ISCSI:
+        'os_brick.initiator.connectors.qemu.QemuIScsiConnector',
 }
 
 
@@ -272,14 +281,13 @@ class InitiatorConnector(object):
     def factory(protocol, root_helper, driver=None,
                 use_multipath=False,
                 device_scan_attempts=initiator.DEVICE_SCAN_ATTEMPTS_DEFAULT,
-                arch=None,
+                arch=None, use_qemu=False,
                 *args, **kwargs):
         """Build a Connector object based upon protocol and architecture."""
 
-        _mapping = get_connector_mapping(arch)
-
         LOG.debug("Factory for %(protocol)s on %(arch)s",
                   {'protocol': protocol, 'arch': arch})
+
         protocol = protocol.upper()
 
         # set any special kwargs needed by connectors
@@ -298,7 +306,15 @@ class InitiatorConnector(object):
              'device_scan_attempts': device_scan_attempts,
              })
 
-        connector = _mapping.get(protocol)
+        connector = None
+
+        if use_qemu:
+            connector = _connector_mapping_qemu.get(protocol)
+
+        if not connector:
+            _mapping = get_connector_mapping(arch)
+            connector = _mapping.get(protocol)
+
         if not connector:
             msg = (_("Invalid InitiatorConnector protocol "
                      "specified %(protocol)s") %
