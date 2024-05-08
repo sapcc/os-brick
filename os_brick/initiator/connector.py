@@ -104,6 +104,8 @@ _connector_mapping_linux = {
         'os_brick.initiator.connectors.scaleio.ScaleIOConnector',
     initiator.VMDK:
         'os_brick.initiator.connectors.vmware.VmdkConnector',
+    initiator.VMWAREFCD:
+        'os_brick.initiator.connectors.vmware.VmdkConnector',
     initiator.GPFS:
         'os_brick.initiator.connectors.gpfs.GPFSConnector',
     initiator.STORPOOL:
